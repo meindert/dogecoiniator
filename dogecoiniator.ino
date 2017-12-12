@@ -103,7 +103,7 @@ int dogeBalance=100;
 //set this info for your own network
 netInfo homeNet = { .mqttHost = "m13.cloudmqtt.com",      //can be blank if not using MQTT
           .mqttUser = "rcdkomtj",   //can be blank
-          .mqttPass = "-rT8Sv-0a384",   //can be blank
+       
           .mqttPort = 19547,          //default port for MQTT is 1883 - only chance if needed.
           .ssid = "hoving", 
           .pass = "groningen"};
