@@ -41,10 +41,15 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <EEPROM.h>
+#include <TextFinder.h>
+#include <esp8266wifi.h>
+#include <ESP8266HTTPClient.h>
 
 #define TOPIC "cmnd/ipreo/rgb"
 #define STATUS TOPIC "/status"
 #define NETWORK_HOSTNAME "doge"
+#define MQTT_DEBUG TOPIC "/debug"
 //#define OTA_PASSWORD ""
 
 #define RED_PIN 15    
@@ -87,6 +92,7 @@ boolean newCommand = false;
 
 char* lightTopic = TOPIC;
 char* statusTopic = STATUS;
+char* debugTopic = MQTT_DEBUG;
 char* hostnameStr = NETWORK_HOSTNAME;
 
 const int redPin = RED_PIN;
@@ -97,13 +103,13 @@ const int buttonPin = BUTTON_PIN;
 
 
 char statusString[50];  //string containing the current setting for the light
-int dogeBalance=100;
-
+int customerFloat;
+int vendorFloat;
 
 //set this info for your own network
 netInfo homeNet = { .mqttHost = "m13.cloudmqtt.com",      //can be blank if not using MQTT
           .mqttUser = "rcdkomtj",   //can be blank
-       
+          .mqttPass = "-rT8Sv-0a384",   //can be blank
           .mqttPort = 19547,          //default port for MQTT is 1883 - only chance if needed.
           .ssid = "hoving", 
           .pass = "groningen"};
@@ -117,6 +123,14 @@ Adafruit_SSD1306 display(OLED_RESET);
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
 
+const char* host = "api.blockcypher.com";
+const uint32_t amount = 500;          //amount in bits(uBTC) needed to trigger payment indicator
+String address;
+uint32_t rateLimit = 0, balance = 0, balanceLocal = 0;
+uint8_t i = 0, count = 0, state = 0, balInit = 0;
+
+
+
 void setup() {
   //initialize the light as an output and set to LOW (off)
   pinMode(redPin, OUTPUT);
@@ -129,6 +143,20 @@ void setup() {
   digitalWrite(greenPin, LOW);
   digitalWrite(bluePin, LOW);
   digitalWrite(bubblePin, LOW);
+  
+  EEPROM.begin(512); //Max bytes of eeprom to use
+  byte high = EEPROM.read(0);
+  byte low = EEPROM.read(1);
+  customerFloat=word(high,low);
+
+  high = EEPROM.read(2);
+  low = EEPROM.read(3);
+  vendorFloat=word(high,low);
+  
+ // EEPROM_readAnything(2, vendorFloat);
+  if (customerFloat == 0){
+    customerFloat=230;
+  }
 
   pinMode(buttonPin, INPUT);
   delay(1000);
@@ -157,13 +185,14 @@ void setup() {
   myESP.setMQTTCallback(callback);
   myESP.addSubscription(lightTopic);
   myESP.begin();
+
 }
 
 
+int counter=0;
 
 void loop(){
   static bool connected = false; //keeps track of connection state to reset from MOOD to SET when network connection is made
-
 
   if(myESP.loop() == FULL_CONNECTION){
 
@@ -173,32 +202,74 @@ void loop(){
       myESP.publish(statusTopic, "h0.00,0.00,0.00 ", true);
     }
 
+    if (counter++ == 1000){
+      counter=0;
+      blockChainHandler();
+    }
+    
     lightHandler();
 
     bubbleHandler();
 
     drawIPAddress();
-  }
 
+  }
   
   yield();
 }
 
+void blockChainHandler()
+{
+  myESP.publish(debugTopic,"blockChainHandler()", true);
+  HTTPClient http;
+  http.begin("http://api.blockcypher.com/v1/btc/main/addrs/38fvBZZzuRSS1k3fkoe4ym5xZfthRcCcH3/balance?token=2181de70e29f43a1ada49c20f0aef116");
+  int httpCode = http.GET();
+  String payload = "payload=" + http.getString();
+  char charBuf[payload.length()+1];
+  payload.toCharArray(charBuf, payload.length());
+  http.end();
+  myESP.publish(debugTopic,charBuf , true);
+}
+
+
+
  void bubbleHandler()
  {
   if (digitalRead(buttonPin) == LOW) {
-    digitalWrite(bubblePin, HIGH);
+    if (digitalRead(bubblePin) == LOW) {
+      digitalWrite(bubblePin, HIGH);
+    }else{
+      digitalWrite(bubblePin, LOW);
+    }
+    delay(1000);
+  }
+  if (customerFloat<1){
+    digitalWrite(bubblePin, LOW);
   }
   if (digitalRead(bubblePin) == HIGH) {
-    dogeBalance = dogeBalance-1;
+    chargeCustomer();
   }
-  if (dogeBalance<1){
-    digitalWrite(bubblePin, LOW);
-    dogeBalance = 0;
-  }
+  
  }
+
+ void chargeCustomer()
+ {
+    customerFloat = customerFloat -1;
+    vendorFloat = vendorFloat +1;
+    EEPROM.write(0,highByte(customerFloat));
+    EEPROM.write(1,lowByte(customerFloat));
+    EEPROM.write(2,highByte(vendorFloat));
+    EEPROM.write(3,lowByte(vendorFloat));
+    EEPROM.commit();
+    String statusJson="{\"Status\":";
+    statusJson = statusJson + "{\"CustomerFloat\":" + customerFloat + ", VendorFloat\":" + vendorFloat + "}}";
+    char charBuf[statusJson.length() + 1];
+    statusJson.toCharArray(charBuf, statusJson.length());
+    myESP.publish(statusTopic,charBuf , true);
+ }
+ 
  void drawBootText() 
-{
+ {
   // Clear the buffer.
   display.clearDisplay();
 
@@ -223,7 +294,7 @@ void drawIPAddress()
   display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(0,0);
-  display.print(dogeBalance);
+  display.print(customerFloat);
   display.println(" doge");
   display.setTextSize(1);
   display.setTextColor(WHITE);
@@ -506,6 +577,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   //package up status message reply and send it back out to the status topic
   strcpy(statusString, newPayload);
   myESP.publish(statusTopic, statusString, true);
+  
 }
 
 
