@@ -110,7 +110,7 @@ int balanceLocal;
 //set this info for your own network
 netInfo homeNet = { .mqttHost = "m13.cloudmqtt.com",      //can be blank if not using MQTT
           .mqttUser = "rcdkomtj",   //can be blank
-          .mqttPass = "-rT8Sv-0a384",   //can be blank
+          .mqttPass = "......",   //can be blank
           .mqttPort = 19547,          //default port for MQTT is 1883 - only chance if needed.
           .ssid = "meindert", 
           .pass = ""};
@@ -711,6 +711,7 @@ float map_double(double x, double in_min, double in_max, double out_min, double 
 {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
+
 
 
 
