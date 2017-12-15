@@ -48,7 +48,7 @@
 
 #define TOPIC "cmnd/ipreo/rgb"
 #define STATUS TOPIC "/status"
-#define NETWORK_HOSTNAME "doge"
+#define NETWORK_HOSTNAME "dogecoiniator"
 #define MQTT_DEBUG TOPIC "/debug"
 //#define OTA_PASSWORD ""
 
@@ -105,14 +105,15 @@ const int buttonPin = BUTTON_PIN;
 char statusString[50];  //string containing the current setting for the light
 int customerFloat;
 int vendorFloat;
+int balanceLocal;
 
 //set this info for your own network
 netInfo homeNet = { .mqttHost = "m13.cloudmqtt.com",      //can be blank if not using MQTT
           .mqttUser = "rcdkomtj",   //can be blank
           .mqttPass = "-rT8Sv-0a384",   //can be blank
           .mqttPort = 19547,          //default port for MQTT is 1883 - only chance if needed.
-          .ssid = "hoving", 
-          .pass = "groningen"};
+          .ssid = "meindert", 
+          .pass = ""};
 
 ESPHelper myESP(&homeNet);
 
@@ -124,14 +125,15 @@ Adafruit_SSD1306 display(OLED_RESET);
 #endif
 
 const char* host = "api.blockcypher.com";
-const uint32_t amount = 500;          //amount in bits(uBTC) needed to trigger payment indicator
 String address;
-uint32_t rateLimit = 0, balance = 0, balanceLocal = 0;
-uint8_t i = 0, count = 0, state = 0, balInit = 0;
+uint32_t rateLimit = 0;
+int balance = 0;
+uint8_t i = 0, count = 0, state = 0;
 
 
 
 void setup() {
+  Serial.begin(115200);
   //initialize the light as an output and set to LOW (off)
   pinMode(redPin, OUTPUT);
   pinMode(bluePin, OUTPUT);
@@ -152,6 +154,10 @@ void setup() {
   high = EEPROM.read(2);
   low = EEPROM.read(3);
   vendorFloat=word(high,low);
+
+  high = EEPROM.read(4);
+  low = EEPROM.read(5);
+  balanceLocal=word(high,low);
   
  // EEPROM_readAnything(2, vendorFloat);
   if (customerFloat == 0){
@@ -189,8 +195,9 @@ void setup() {
 }
 
 
-int counter=0;
-
+//#define ONEMIN (1000UL * 60)
+#define ONEMIN (1000UL * 30)
+unsigned long rolltime = millis() + ONEMIN;
 void loop(){
   static bool connected = false; //keeps track of connection state to reset from MOOD to SET when network connection is made
 
@@ -199,12 +206,13 @@ void loop(){
     //if the light was previously not connected to wifi and mqtt, update the status topic with the light being off
     if(!connected){
       connected = true; //we have reconnected so now we dont need to flag the setting anymore
-      myESP.publish(statusTopic, "h0.00,0.00,0.00 ", true);
+      //myESP.publish(statusTopic, "h0.00,0.00,0.00 ", true);
+      Serial.print("Connected");
     }
 
-    if (counter++ == 1000){
-      counter=0;
-      blockChainHandler();
+    if((long)(millis() - rolltime) >= 0) {
+      checkDogeBalance();
+      rolltime += ONEMIN;
     }
     
     lightHandler();
@@ -213,24 +221,95 @@ void loop(){
 
     drawIPAddress();
 
+  }else{
+    Serial.print("Not Connected");
+    drawBootText(); 
   }
   
   yield();
 }
 
-void blockChainHandler()
-{
-  myESP.publish(debugTopic,"blockChainHandler()", true);
-  HTTPClient http;
-  http.begin("http://api.blockcypher.com/v1/btc/main/addrs/38fvBZZzuRSS1k3fkoe4ym5xZfthRcCcH3/balance?token=2181de70e29f43a1ada49c20f0aef116");
-  int httpCode = http.GET();
-  String payload = "payload=" + http.getString();
-  char charBuf[payload.length()+1];
-  payload.toCharArray(charBuf, payload.length());
-  http.end();
-  myESP.publish(debugTopic,charBuf , true);
-}
+void checkDogeBalance(){
+  
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+  const int httpPort = 80;
+  if (!client.connect(host, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
 
+  TextFinder finder(client);
+
+  String url = "/v1/doge/main/addrs/DEPdufKE8BakQXbwZNhxzk9CFHBvYteDSR/balance?token=2181de70e29f43a1ada49c20f0aef116";
+
+  Serial.print("Requesting data from ");
+  Serial.println(host);
+  Serial.println("");
+  
+  // This will send the request to the server
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "Connection: close\r\n\r\n");
+              
+  delay(1000);
+
+  // Read all the lines of the reply from server and print them to Serial
+  while (client.available()) {
+
+    //String json = client.readString();
+  
+    if (finder.find("X-Ratelimit-Remaining")) {
+      rateLimit = finder.getValue();
+      Serial.print("Remaining queries: ");
+      Serial.println(rateLimit);
+    }
+    
+    if (finder.find("address")) {
+      address = client.readStringUntil('\n');
+      Serial.print("Address: ");
+      Serial.println(address.substring(4, 38));
+    }
+    
+    if (finder.find("final_balance")) {
+      char charBuf[15];
+      int lengthOfNumber=finder.getString(" ", ",",charBuf,15);
+      char charBuf2[lengthOfNumber-9];
+      for (int i=0; i <= lengthOfNumber-9; i++){
+        charBuf2[i]=charBuf[i];
+      } 
+      balance = atoi(charBuf2);
+      Serial.print("Balance: ");
+      Serial.print(balance);
+      Serial.println(" doge");
+      Serial.println("");
+      
+      if (balance != balanceLocal) {
+        uint32_t payment = balance - balanceLocal;
+        Serial.print("Payment: ");
+        Serial.print(payment);
+        Serial.println(" doge");
+        delay(10000);
+        balanceLocal = balance;
+        if (payment>0)
+          customerFloat=customerFloat+payment;
+        else
+          vendorFloat=vendorFloat+payment;
+        chargeCustomer();
+      }
+
+      Serial.println("");
+    }
+    client.flush();
+    Serial.print(" customerFloat:");
+    Serial.print(customerFloat);
+    Serial.println(" doge");
+    Serial.print(" vendorFloat:");
+    Serial.print(vendorFloat);
+    Serial.println(" doge");
+    delay(1000);
+  }
+}
 
 
  void bubbleHandler()
@@ -256,16 +335,22 @@ void blockChainHandler()
  {
     customerFloat = customerFloat -1;
     vendorFloat = vendorFloat +1;
+    if (balanceLocal<vendorFloat)
+      vendorFloat=balanceLocal-customerFloat;
     EEPROM.write(0,highByte(customerFloat));
     EEPROM.write(1,lowByte(customerFloat));
     EEPROM.write(2,highByte(vendorFloat));
     EEPROM.write(3,lowByte(vendorFloat));
+    EEPROM.write(4,highByte(balanceLocal));
+    EEPROM.write(5,lowByte(balanceLocal));
+    
     EEPROM.commit();
     String statusJson="{\"Status\":";
-    statusJson = statusJson + "{\"CustomerFloat\":" + customerFloat + ", VendorFloat\":" + vendorFloat + "}}";
+    statusJson = statusJson + "{\"BalanceLocal\":" + balanceLocal + ", \"CustomerFloat\":" + customerFloat + ", \"VendorFloat\":" + vendorFloat + "}}";
     char charBuf[statusJson.length() + 1];
     statusJson.toCharArray(charBuf, statusJson.length());
-    myESP.publish(statusTopic,charBuf , true);
+    Serial.println(statusJson);
+   // myESP.publish(statusTopic,charBuf , true);
  }
  
  void drawBootText() 
@@ -302,6 +387,8 @@ void drawIPAddress()
   display.print("IP:"); 
   display.println(WiFi.localIP().toString());
   display.display();
+
+  
 }
 
 void lightHandler(){
@@ -576,7 +663,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   //package up status message reply and send it back out to the status topic
   strcpy(statusString, newPayload);
-  myESP.publish(statusTopic, statusString, true);
+  //myESP.publish(statusTopic, statusString, true);
   
 }
 
@@ -624,6 +711,8 @@ float map_double(double x, double in_min, double in_max, double out_min, double 
 {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
+
+
 
 
 
